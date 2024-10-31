@@ -47,35 +47,63 @@ pile-uncopyrighted dataset.
    - Implemented efficient NPZ storage
    - Metadata tracking system in place
 
-### Phase 2: Storage Architecture
+### Phase 2: Preprocessing & Storage ✓
 
 1. **Storage Format** ✓
    - Primary: NPZ compressed arrays (implemented)
    - Metadata: Basic tracking implemented
-   - Directory structure:
-   ```
-   activations/
-   ├── chunks/
-   │   ├── chunk_0000.npz
-   │   ├── chunk_0001.npz
-   │   └── ...
-   └── metadata.json
-   ```
+   - Directory structure maintained
 
 2. **Implementation Stages**
    - [x] Basic NumPy storage implementation
    - [x] Metadata tracking system
    - [x] Compression support
+   - [x] Whitening transformation
    - [ ] Parallel processing
    - [ ] Caching layer
    - [x] Performance monitoring
 
-### Phase 3: Clustering Implementation
+3. **Whitening Implementation** ✓
+   - Position-aware whitening transform
+   - Per-position statistics computation
+   - Reversible transformation support
+   - Validation metrics implemented
+   - GPU-accelerated processing
 
-1. [ ] Implement basic k-means clustering
-2. [ ] Add density modeling
-3. [ ] Create feature interpretation pipeline
-4. [ ] Set up evaluation metrics
+### Phase 3: Clustering Implementation (Updated)
+
+1. **Two-Level Clustering Approach**
+   - [ ] Global Feature Space Analysis
+     * Cluster all positions together (n=256) for SAE comparison
+     * Learn position-agnostic features first
+     * Enables direct comparison with SAE features
+   
+   - [ ] Position-Specific Refinement
+     * Analyze how global clusters manifest at each position
+     * Track cluster usage patterns across positions
+     * Identify position-specific variations
+
+2. **Implementation Strategy**
+   - [ ] Global Clustering
+     * Mini-batch k-means on all positions (256 clusters)
+     * Density modeling for cluster distributions
+     * Feature interpretation pipeline
+   
+   - [ ] Positional Analysis
+     * Track cluster assignment frequencies per position
+     * Compute position-specific cluster statistics
+     * Identify position-dependent patterns
+
+3. **Evaluation Framework**
+   - [ ] Global Metrics
+     * Compare with SAE features directly
+     * Measure clustering quality (silhouette, etc.)
+     * Assess feature interpretability
+   
+   - [ ] Positional Metrics
+     * Position-specific cluster usage patterns
+     * Transition patterns between positions
+     * Position-dependent feature analysis
 
 ### Phase 4: Analysis & Scaling
 
@@ -84,22 +112,19 @@ pile-uncopyrighted dataset.
 3. [ ] Document findings and insights
 4. [ ] Plan scaling to larger sample if needed
 
-## Key Experiments
+## Key Experiments (Updated)
 
-1. **Clustering Quality Analysis**
-   - Compare different numbers of clusters (64, 128, 256)
-   - Evaluate against SAE feature dimensions
-   - Measure silhouette scores and interpretation quality
+1. **Clustering Analysis**
+   - Global clustering (256 clusters) across all positions
+   - Position-specific cluster usage patterns
+   - Comparison with SAE feature directions
+   - Analysis of position-dependent variations
 
-2. **Computational Efficiency**
-   - Training time comparison
-   - Memory usage analysis
-   - Inference speed benchmarks
-
-3. **Feature Interpretation**
-   - Analyze cluster centroids
-   - Compare with SAE features
-   - Evaluate interpretability metrics
+2. **Feature Interpretation**
+   - Global feature space analysis
+   - Position-specific feature variations
+   - Cluster usage patterns across positions
+   - Comparison with SAE feature interpretations
 
 ## Success Metrics
 
@@ -110,40 +135,36 @@ pile-uncopyrighted dataset.
 
 ## Next Immediate Steps (Updated)
 
-1. [ ] **Data Validation & Analysis**
-   - Verify data integrity across chunks
-   - Calculate overall activation statistics
-   - Check for any anomalies or outliers
+1. [ ] **Clustering Implementation**
+   - Implement batched k-means (n=256)
+   - Set up cluster quality metrics
+   - Design feature interpretation pipeline
 
-2. [ ] **Preprocessing Pipeline**
-   - Implement activation normalization
-   - Add whitening transformation
-   - Set up data loading for clustering
+2. [ ] **Evaluation Framework**
+   - Define comparison metrics with SAEs
+   - Implement interpretability measures
+   - Set up performance benchmarks
 
-3. [ ] **Initial Clustering Setup**
-   - Start with small-scale k-means (n=256)
-   - Implement basic evaluation metrics
-   - Compare with existing SAE dimensionality
-
-4. [ ] **Optimization & Scaling**
-   - Profile memory usage
-   - Optimize chunk loading
-   - Plan for larger-scale runs if needed
-
-## Technical Notes
-
-### Data Collection Specifications
-- Batch Size: 32
-- Chunks Created: ~938 (30,000/32)
-- Format: NPZ compressed files
-- Content: Raw activations + token IDs
-
-### Resource Usage
-- Memory: Managed through batched processing
-- Storage: Compressed NPZ format
-- Processing: GPU-accelerated extraction
+3. [ ] **Scaling & Optimization**
+   - Profile memory usage patterns
+   - Optimize data loading pipeline
+   - Implement parallel processing
 
 ## Current Progress
+
+### Preprocessing Pipeline Complete ✓
+- Implemented position-aware whitening
+- Processing 30,000 samples (3.84M tokens)
+- GPU-accelerated transformation
+- Validation metrics in place
+- Reversible transformations supported
+
+### Technical Implementation Details
+- Architecture: Position-specific whitening transforms
+- Batch Processing: 32 samples per batch
+- Storage Format: NPZ compressed chunks
+- Compute: CUDA-accelerated operations
+- Validation: Mean and covariance checks per position
 
 ### Initial Data Collection Complete ✓
 - Extracted activations from 30,000 samples
