@@ -137,6 +137,7 @@ def save_whitened_chunks(
 
 def save_transform_params(whitening: PositionalWhitening, output_dir: Path):
     """Save whitening parameters for future use."""
+    output_dir.mkdir(parents=True, exist_ok=True)
     param_path = output_dir / "whitening_params.pt"
     torch.save({
         'mean': whitening.mean.cpu(),
@@ -208,9 +209,9 @@ def main():
     # Validate transform
     validate_whitening(whitening, input_paths[0])
     
-    # Apply transform to all chunks
-    save_whitened_chunks(whitening, input_paths, output_dir, batch_size)
-    logger.info("Completed whitening all chunks")
+    # # Apply transform to all chunks
+    # save_whitened_chunks(whitening, input_paths, output_dir, batch_size)
+    # logger.info("Completed whitening all chunks")
 
 if __name__ == "__main__":
     main()
