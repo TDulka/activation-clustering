@@ -223,7 +223,7 @@ def run_extraction(config: ExtractionConfig):
             f"Std: {activations.std():.4f}"
         )
 
-# %% Interactive testing
+# %% Interactive running
 if __name__ == "__main__":
     """Entry point for extraction script.
     """
@@ -234,5 +234,3 @@ if __name__ == "__main__":
     
     # Run extraction pipeline
     run_extraction(config)
-
-# %%

@@ -30,39 +30,45 @@ pile-uncopyrighted dataset.
 
 ## Implementation Plan
 
-### Phase 1: Initial Setup & Sampling
+### Phase 1: Initial Setup & Sampling ✓
 
-1. [ ] Set up environment and dependencies
-2. [ ] Initialize Gemma-2-2b with layer 12 activation hooks
-3. [ ] Implement sampling pipeline
-    - Stratified random sampling across documents
-    - Preserve 512 token context windows
-    - Maintain source distribution
-4. [ ] Create activation storage architecture
+1. [x] Set up environment and dependencies
+   - Poetry configuration complete
+   - Core dependencies specified
+   - Development tools configured
+2. [x] Initialize Gemma-2-2b with layer 12 activation hooks
+   - Implemented in ActivationExtractor class
+   - Supports configurable layer selection
+3. [x] Implement sampling pipeline
+   - Stratified random sampling across documents
+   - Preserve 512 token context windows
+   - Maintain source distribution
+4. [x] Create activation storage architecture
+   - Implemented efficient NPZ storage
+   - Metadata tracking system in place
 
 ### Phase 2: Storage Architecture
 
-1. **Storage Format**
-   - Primary: Memory-mapped arrays using PyArrow
-   - Metadata: SQLite database for token/sequence tracking
+1. **Storage Format** ✓
+   - Primary: NPZ compressed arrays (implemented)
+   - Metadata: Basic tracking implemented
    - Directory structure:
    ```
    activations/
    ├── chunks/
-   │   ├── chunk_0000.arrow
-   │   ├── chunk_0001.arrow
+   │   ├── chunk_0000.npz
+   │   ├── chunk_0001.npz
    │   └── ...
-   ├── metadata.sqlite
-   └── index.json
+   └── metadata.json
    ```
 
 2. **Implementation Stages**
-   - [ ] Basic Arrow/NumPy storage implementation
-   - [ ] Metadata tracking system
-   - [ ] Compression support
+   - [x] Basic NumPy storage implementation
+   - [x] Metadata tracking system
+   - [x] Compression support
    - [ ] Parallel processing
    - [ ] Caching layer
-   - [ ] Performance monitoring
+   - [x] Performance monitoring
 
 ### Phase 3: Clustering Implementation
 
@@ -102,12 +108,55 @@ pile-uncopyrighted dataset.
 - Feature interpretation clarity
 - Implementation simplicity and maintainability
 
-## Next Immediate Steps
+## Next Immediate Steps (Updated)
 
-1. [ ] Set up development environment
-2. [ ] Implement dataset sampling pipeline
-3. [ ] Create initial storage architecture
-4. [ ] Build activation extraction script
+1. [ ] **Data Validation & Analysis**
+   - Verify data integrity across chunks
+   - Calculate overall activation statistics
+   - Check for any anomalies or outliers
+
+2. [ ] **Preprocessing Pipeline**
+   - Implement activation normalization
+   - Add whitening transformation
+   - Set up data loading for clustering
+
+3. [ ] **Initial Clustering Setup**
+   - Start with small-scale k-means (n=256)
+   - Implement basic evaluation metrics
+   - Compare with existing SAE dimensionality
+
+4. [ ] **Optimization & Scaling**
+   - Profile memory usage
+   - Optimize chunk loading
+   - Plan for larger-scale runs if needed
+
+## Technical Notes
+
+### Data Collection Specifications
+- Batch Size: 32
+- Chunks Created: ~938 (30,000/32)
+- Format: NPZ compressed files
+- Content: Raw activations + token IDs
+
+### Resource Usage
+- Memory: Managed through batched processing
+- Storage: Compressed NPZ format
+- Processing: GPU-accelerated extraction
+
+## Current Progress
+
+### Initial Data Collection Complete ✓
+- Extracted activations from 30,000 samples
+- Model: Gemma-2-2b Layer 12
+- Sequence Length: 128 tokens
+- Total Tokens Processed: ~3.84M tokens (30k × 128)
+- Storage Format: NPZ compressed chunks
+
+### Preliminary Statistics
+- Activation Shape: [batch_size, seq_length, 2304]
+- Data Collection Runtime: Completed successfully
+- Storage Location: /workspace/data/activations/chunks/
+- Monitoring: Batch-level statistics (mean, std) collected
 
 ## Documentation Requirements
 
