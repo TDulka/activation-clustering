@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 from typing import List, Optional
 import torch
@@ -182,42 +183,33 @@ def validate_whitening(whitening: PositionalWhitening, sample_path: Path):
         eye_diff_norm = torch.norm(pos_cov - torch.eye(pos_cov.shape[0], device=pos_cov.device)).item()
         logger.info(f"Position {pos} covariance deviation from identity: {eye_diff_norm:.6f}")
 
+# %%
 def main():
-    parser = argparse.ArgumentParser(description="Whiten neural network activations")
-    parser.add_argument("--input_dir", type=Path, required=True, help="Input directory containing activation chunks")
-    parser.add_argument("--output_dir", type=Path, required=True, help="Output directory for whitened chunks")
-    parser.add_argument("--seq_len", type=int, default=128, help="Sequence length of the activations")
-    parser.add_argument("--n_features", type=int, default=2304, help="Number of features in activations")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for processing")
-    parser.add_argument("--epsilon", type=float, default=1e-6, help="Numerical stability constant")
-    parser.add_argument("--load_params", type=Path, help="Load existing whitening parameters")
-    args = parser.parse_args()
+    # Configuration
+    input_dir = Path("/workspace/data/activations/chunks")
+    output_dir = Path("/workspace/data/whitened_activations")
+    seq_len = 128
+    n_features = 2304
+    batch_size = 32
+    epsilon = 1e-6
 
-    # Create output directory
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    
     # Get input chunks
-    input_paths = get_chunk_paths(args.input_dir)
+    input_paths = get_chunk_paths(input_dir)
     logger.info(f"Found {len(input_paths)} input chunks")
     
-    if args.load_params:
-        # Load existing transform
-        whitening = load_transform_params(args.load_params)
-        logger.info(f"Loaded whitening parameters from {args.load_params}")
-    else:
-        # Fit new transform
-        whitening = PositionalWhitening(args.seq_len, args.n_features, args.epsilon)
-        whitening.fit(input_paths)
-        logger.info("Fitted new whitening transform")
-        
-        # Save parameters
-        save_transform_params(whitening, args.output_dir)
+    # Initialize and fit whitening transform
+    whitening = PositionalWhitening(seq_len, n_features, epsilon)
+    whitening.fit(input_paths)
+    logger.info("Fitted whitening transform")
+    
+    # Save parameters
+    save_transform_params(whitening, output_dir)
     
     # Validate transform
     validate_whitening(whitening, input_paths[0])
     
     # Apply transform to all chunks
-    save_whitened_chunks(whitening, input_paths, args.output_dir, args.batch_size)
+    save_whitened_chunks(whitening, input_paths, output_dir, batch_size)
     logger.info("Completed whitening all chunks")
 
 if __name__ == "__main__":
