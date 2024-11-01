@@ -1,225 +1,192 @@
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Iterator
+from typing import Dict, List, Tuple
 import torch
 from torch import nn
-from tqdm import tqdm
 import numpy as np
 import logging
-import time
-import joblib
 from dataclasses import dataclass
 from sklearn.cluster import MiniBatchKMeans
+from collections import defaultdict
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class MemoryTracker:
-    """Track GPU memory usage"""
-    @staticmethod
-    def get_memory_stats() -> Dict[str, float]:
-        if torch.cuda.is_available():
-            return {
-                'allocated': torch.cuda.memory_allocated() / 1e9,
-                'cached': torch.cuda.memory_reserved() / 1e9
-            }
-        return {}
-
-class ProgressTracker:
-    """Track training progress and metrics"""
-    def __init__(self):
-        self.metrics_history = []
-        self.start_time = time.time()
-    
-    def update(self, metrics: Dict[str, float]):
-        self.metrics_history.append({
-            'timestamp': time.time() - self.start_time,
-            **metrics
-        })
-    
-    def get_summary(self) -> Dict[str, float]:
-        if not self.metrics_history:
-            return {}
-        return {
-            'duration': time.time() - self.start_time,
-            'final_metrics': self.metrics_history[-1]
-        }
 
 @dataclass
 class ClusteringConfig:
-    n_clusters: int = 16384  # Matching SAE latent dimension
+    n_clusters: int = 16384
     batch_size: int = 32
-    n_init: int = 3
     max_iter: int = 100
     random_state: int = 42
-    seq_len: int = 128
-    n_features: int = 2304
-    max_points_per_batch: int = 100_000
-    
-    def __post_init__(self):
-        if self.n_clusters > self.max_points_per_batch:
-            raise ValueError("max_points_per_batch must be larger than n_clusters")
-        self.memory_estimate = (self.n_clusters * self.n_features * 4) / 1e9
 
-class PositionalKMeans(nn.Module):
+
+class ActivationKMeans(nn.Module):
     def __init__(self, config: ClusteringConfig):
         super().__init__()
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.memory_tracker = MemoryTracker()
-        self.progress_tracker = ProgressTracker()
-        
-        logger.info(f"Initializing K-means with {config.n_clusters} clusters")
-        logger.info(f"Estimated memory: {config.memory_estimate:.2f} GB")
-        
+
+        logger.info(f"Initializing KMeans with {config.n_clusters} clusters")
         self.kmeans = MiniBatchKMeans(
             n_clusters=config.n_clusters,
             batch_size=config.batch_size,
-            n_init=config.n_init,
             max_iter=config.max_iter,
             random_state=config.random_state,
-            max_no_improvement=20,
-            verbose=1
+            verbose=1,  # Add verbosity to see iterations
         )
-        
-        # Only store counts, load centroids when needed
-        self.register_buffer('position_counts', 
-            torch.zeros(config.seq_len, config.n_clusters, dtype=torch.uint32))
-    
-    def _batch_generator(self, chunk_paths: List[Path]) -> Iterator[torch.Tensor]:
-        """Memory-efficient batch generator"""
-        buffer = []
-        buffer_size = 0
-        
-        for path in chunk_paths:
-            try:
-                chunk = np.load(path)['activations']
-                chunk = chunk.reshape(-1, chunk.shape[-1])
-                
-                for idx in range(0, len(chunk), self.config.batch_size):
-                    batch = torch.from_numpy(chunk[idx:idx + self.config.batch_size])
-                    buffer.append(batch)
-                    buffer_size += len(batch)
-                    
-                    if buffer_size >= self.config.max_points_per_batch:
-                        yield torch.cat(buffer).to(self.device)
-                        buffer = []
-                        buffer_size = 0
-                        torch.cuda.empty_cache()
-                        
-            except Exception as e:
-                logger.error(f"Error processing {path}: {e}")
-                continue
-                
-        if buffer:
-            yield torch.cat(buffer).to(self.device)
-    
-    def fit(self, chunk_paths: List[Path]):
-        """Fit k-means with memory-efficient batching and progress tracking"""
-        logger.info("Starting global k-means fitting...")
-        torch.cuda.empty_cache()
-        
-        try:
-            # Fit using generator
-            for batch in tqdm(self._batch_generator(chunk_paths), desc="Fitting clusters"):
-                self.kmeans.partial_fit(batch.cpu().numpy())
-                
-                # Track progress
-                metrics = self.compute_metrics()
-                self.progress_tracker.update(metrics)
-                logger.info(f"Batch metrics: {metrics}")
-                
-            # Compute position statistics
-            self._compute_position_statistics(chunk_paths)
-            
-        except Exception as e:
-            logger.error(f"Error during fitting: {e}")
-            raise
-        
+
+    def fit(self, activations: torch.Tensor):
+        """Fit k-means on flattened activations using all data
+
+        Args:
+            activations: Tensor of any shape [..., n_features]
+        """
+        # Flatten all dimensions except the last
+        flat_activations = activations.reshape(-1, activations.shape[-1])
+
+        logger.info(f"Starting KMeans fit on tensor of shape {flat_activations.shape}")
+        data = flat_activations.cpu().numpy()
+
+        # Use a much larger batch size (about 5x n_clusters)
+        batch_size = max(100000, self.config.n_clusters * 5)  # ~82k samples minimum
+        n_batches = (len(data) + batch_size - 1) // batch_size
+
+        for i in tqdm(range(n_batches), desc="Fitting KMeans"):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, len(data))
+            batch = data[start_idx:end_idx]
+            self.kmeans.partial_fit(batch)
+
+        logger.info("KMeans fitting completed")
         return self
-    
-    def compute_metrics(self) -> Dict[str, float]:
-        """Compute clustering quality metrics"""
-        metrics = {
-            'inertia': self.kmeans.inertia_,
-            'n_empty_clusters': (self.position_counts.sum(0) == 0).sum().item(),
-        }
-        
-        # Add memory stats
-        metrics.update(self.memory_tracker.get_memory_stats())
-        
-        # Position-specific metrics
-        pos_entropy = torch.zeros(self.config.seq_len)
-        for pos in range(self.config.seq_len):
-            dist = self.get_position_distribution(pos)
-            pos_entropy[pos] = -(dist * torch.log(dist + 1e-10)).sum()
-        
-        metrics.update({
-            'position_entropy_mean': pos_entropy.mean().item(),
-            'position_entropy_std': pos_entropy.std().item()
-        })
-        
-        return metrics
-    
-    def get_position_distribution(self, position: int) -> torch.Tensor:
-        """Get normalized cluster usage distribution for a position"""
-        counts = self.position_counts[position].float()
-        return counts / (counts.sum() + 1e-10)
-    
-    @classmethod
-    def load_checkpoint(cls, path: Path) -> 'PositionalKMeans':
-        """Load with validation"""
-        try:
-            state = torch.load(path / "clustering_results.pt")
-            kmeans = joblib.load(path / "kmeans_model.joblib")
-            
-            instance = cls(state['config'])
-            instance.kmeans = kmeans
-            instance.position_counts = state['position_counts']
-            
-            # Validate loaded state
-            metrics = instance.compute_metrics()
-            logger.info(f"Loaded checkpoint metrics: {metrics}")
-            
-            return instance
-            
-        except Exception as e:
-            logger.error(f"Error loading checkpoint: {e}")
-            raise
-    
+
+    def predict(self, activations: torch.Tensor) -> torch.Tensor:
+        """Get cluster assignments for activations"""
+        original_shape = activations.shape[:-1]
+        flat_activations = activations.reshape(-1, activations.shape[-1])
+
+        # Process predictions in batches
+        batch_size = 10000
+        n_batches = (len(flat_activations) + batch_size - 1) // batch_size
+        all_labels = []
+
+        logger.info(f"Predicting clusters for tensor of shape {flat_activations.shape}")
+        for i in tqdm(range(n_batches), desc="Predicting clusters"):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, len(flat_activations))
+            batch = flat_activations[start_idx:end_idx].cpu().numpy()
+            labels = self.kmeans.predict(batch)
+            all_labels.append(labels)
+
+        labels = np.concatenate(all_labels)
+        return torch.from_numpy(labels).reshape(original_shape)
+
     def save_checkpoint(self, path: Path):
-        """Save with metadata"""
+        """Save clustering results"""
         path.mkdir(parents=True, exist_ok=True)
-        
-        # Save torch components
-        torch.save({
-            'config': self.config,
-            'position_counts': self.position_counts,
-            'metrics': self.progress_tracker.get_summary()
-        }, path / "clustering_results.pt")
-        
-        # Save sklearn model
-        joblib.dump(self.kmeans, path / "kmeans_model.joblib")
-        
-        logger.info(f"Saved checkpoint to {path}")
+        torch.save(
+            {
+                "config": self.config,
+                "centroids": torch.from_numpy(self.kmeans.cluster_centers_),
+            },
+            path / "clustering_results.pt",
+        )
 
-def main():
-    config = ClusteringConfig()
-    input_dir = Path("/workspace/data/whitened_activations")
-    output_dir = Path("/workspace/data/clustering_results")
-    
-    chunk_paths = sorted(input_dir.glob("whitened_chunk_*.npz"))
-    logger.info(f"Found {len(chunk_paths)} whitened chunks")
-    
-    clustering = PositionalKMeans(config)
-    clustering.fit(chunk_paths)
-    
-    # Save results
-    clustering.save_checkpoint(output_dir)
-    logger.info("Completed clustering")
-    
-    # Log final metrics
-    final_metrics = clustering.progress_tracker.get_summary()
-    logger.info(f"Final metrics: {final_metrics}")
+    @classmethod
+    def load_checkpoint(cls, path: Path) -> "ActivationKMeans":
+        """Load clustering results"""
+        state = torch.load(path / "clustering_results.pt")
+        instance = cls(state["config"])
+        instance.kmeans.cluster_centers_ = state["centroids"].numpy()
+        return instance
 
-if __name__ == "__main__":
-    main()
+    def analyze_clusters(
+        self,
+        activations: torch.Tensor,
+        token_ids: torch.Tensor,  # [batch_size, seq_len]
+        max_examples_per_cluster: int = 5,
+        context_window: int = 10,
+    ) -> Dict[int, List[Tuple[int, List[int], int]]]:
+        """Analyze clusters by showing tokens in their original context"""
+        # Get cluster assignments
+        labels = self.predict(activations)  # [batch_size, seq_len]
+
+        # Create a dictionary to store examples for each cluster
+        cluster_examples = defaultdict(list)
+
+        # Process each sequence
+        for batch_idx in range(activations.shape[0]):
+            seq_token_ids = token_ids[batch_idx]  # [seq_len]
+
+            for pos in range(activations.shape[1]):
+                cluster_id = labels[batch_idx, pos].item()
+
+                if len(cluster_examples[cluster_id]) >= max_examples_per_cluster:
+                    continue
+
+                # Get context window
+                start_idx = max(0, pos - context_window)
+                end_idx = min(len(seq_token_ids), pos + context_window + 1)
+
+                # Get the specific token ID
+                token_id = seq_token_ids[pos].item()
+
+                # Get the context token IDs
+                context_ids = seq_token_ids[start_idx:end_idx].tolist()
+
+                # Store token position relative to start of context window
+                token_pos = pos - start_idx
+
+                cluster_examples[cluster_id].append((token_id, context_ids, token_pos))
+
+        return dict(cluster_examples)
+
+
+class ClusterVisualizer:
+    """Utility class for visualizing cluster contents"""
+
+    def __init__(
+        self, cluster_examples: Dict[int, List[Tuple[int, List[int], int]]], tokenizer
+    ):
+        self.cluster_examples = cluster_examples
+        self.tokenizer = tokenizer
+
+    def print_cluster(self, cluster_id: int):
+        """Print examples from a specific cluster"""
+        if cluster_id not in self.cluster_examples:
+            print(f"No examples found for cluster {cluster_id}")
+            return
+
+        print(f"\nCluster {cluster_id}:")
+        print("-" * 80)
+
+        for token_id, context_ids, token_pos in self.cluster_examples[cluster_id]:
+            # Decode token
+            token = self.tokenizer.decode([token_id])
+
+            # Decode parts before and after the token separately
+            prefix = self.tokenizer.decode(context_ids[:token_pos])
+            suffix = self.tokenizer.decode(context_ids[token_pos + 1 :])
+
+            print(f"{prefix}[[[{token}]]]{suffix}")
+            print("-" * 40)
+
+    def print_random_clusters(self, n: int = 5):
+        """Print examples from n random clusters"""
+        cluster_ids = list(self.cluster_examples.keys())
+        selected_ids = np.random.choice(
+            cluster_ids, min(n, len(cluster_ids)), replace=False
+        )
+
+        for cluster_id in selected_ids:
+            self.print_cluster(cluster_id)
+
+    def find_clusters_with_token(self, token: str) -> List[int]:
+        """Find clusters that contain a specific token"""
+        matching_clusters = []
+
+        for cluster_id, examples in self.cluster_examples.items():
+            if any(token == t for t, _, _ in examples):
+                matching_clusters.append(cluster_id)
+
+        return matching_clusters
