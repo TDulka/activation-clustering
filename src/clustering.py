@@ -35,51 +35,107 @@ class ActivationKMeans(nn.Module):
             verbose=1,  # Add verbosity to see iterations
         )
 
-    def fit(self, activations: torch.Tensor):
-        """Fit k-means on flattened activations using all data
+    def fit(self, activations: torch.Tensor, attention_mask: torch.Tensor):
+        """Fit k-means on flattened activations using all data, with diversity sampling
 
         Args:
-            activations: Tensor of any shape [..., n_features]
+            activations: Tensor of shape [batch_size, seq_len, n_features]
+            attention_mask: Tensor of shape [batch_size, seq_len] where 1 indicates valid tokens
+                           and 0 indicates pad/bos tokens to exclude
         """
-        # Flatten all dimensions except the last
-        flat_activations = activations.reshape(-1, activations.shape[-1])
+        batch_size, seq_len, n_features = activations.shape
 
-        logger.info(f"Starting KMeans fit on tensor of shape {flat_activations.shape}")
-        data = flat_activations.cpu().numpy()
+        # Flatten activations and masks
+        flat_activations = activations.reshape(-1, n_features)
+        flat_mask = attention_mask.reshape(-1)
+        sequence_ids = torch.arange(batch_size).repeat_interleave(seq_len)
 
-        # Use a much larger batch size (about 5x n_clusters)
-        batch_size = max(100000, self.config.n_clusters * 5)  # ~82k samples minimum
-        n_batches = (len(data) + batch_size - 1) // batch_size
+        # Filter out pad tokens and bos tokens
+        valid_indices = flat_mask.bool()
+        valid_activations = flat_activations[valid_indices]
+        valid_sequence_ids = sequence_ids[valid_indices]
 
-        for i in tqdm(range(n_batches), desc="Fitting KMeans"):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(data))
-            batch = data[start_idx:end_idx]
-            self.kmeans.partial_fit(batch)
+        logger.info(f"Starting KMeans fit on tensor of shape {valid_activations.shape}")
+        data = valid_activations.cpu().numpy()
+        sequence_ids = valid_sequence_ids.numpy()
+
+        # For each iteration
+        for _ in tqdm(range(self.config.max_iter), desc="KMeans iterations"):
+            # Shuffle sequences
+            sequence_order = np.random.permutation(batch_size)
+
+            # Create mini-batches with one token from each sequence
+            for start_idx in range(0, batch_size, self.config.batch_size):
+                end_idx = min(start_idx + self.config.batch_size, batch_size)
+                batch_sequences = sequence_order[start_idx:end_idx]
+
+                # For each sequence in the batch, randomly sample one token
+                batch_samples = []
+                for seq_id in batch_sequences:
+                    seq_mask = sequence_ids == seq_id
+                    if not seq_mask.any():  # Skip if sequence has no valid tokens
+                        continue
+                    seq_data = data[seq_mask]
+
+                    # Randomly sample one token
+                    sample_idx = np.random.randint(len(seq_data))
+                    batch_samples.append(seq_data[sample_idx : sample_idx + 1])
+
+                if batch_samples:
+                    batch = np.concatenate(batch_samples)
+                    self.kmeans.partial_fit(batch)
 
         logger.info("KMeans fitting completed")
         return self
 
-    def predict(self, activations: torch.Tensor) -> torch.Tensor:
-        """Get cluster assignments for activations"""
+    def predict(
+        self, activations: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Get cluster assignments for activations
+
+        Args:
+            activations: Tensor of shape [..., n_features]
+            attention_mask: Tensor of shape [...] where 1 indicates valid tokens
+
+        Returns:
+            Tensor of same shape as attention_mask with cluster assignments
+            (-1 for excluded tokens)
+        """
         original_shape = activations.shape[:-1]
         flat_activations = activations.reshape(-1, activations.shape[-1])
+        flat_mask = attention_mask.reshape(-1)
+
+        # Initialize all tokens as -1 (invalid/excluded)
+        all_labels = torch.full(
+            (len(flat_activations),), -1, device=activations.device, dtype=torch.long
+        )
+
+        # Only predict for valid tokens
+        valid_indices = flat_mask.bool()
+        valid_activations = flat_activations[valid_indices]
 
         # Process predictions in batches
         batch_size = 10000
-        n_batches = (len(flat_activations) + batch_size - 1) // batch_size
-        all_labels = []
+        n_batches = (len(valid_activations) + batch_size - 1) // batch_size
+        valid_labels = []
 
-        logger.info(f"Predicting clusters for tensor of shape {flat_activations.shape}")
+        logger.info(
+            f"Predicting clusters for tensor of shape {valid_activations.shape}"
+        )
         for i in tqdm(range(n_batches), desc="Predicting clusters"):
             start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(flat_activations))
-            batch = flat_activations[start_idx:end_idx].cpu().numpy()
+            end_idx = min((i + 1) * batch_size, len(valid_activations))
+            batch = valid_activations[start_idx:end_idx].cpu().numpy()
             labels = self.kmeans.predict(batch)
-            all_labels.append(labels)
+            valid_labels.append(labels)
 
-        labels = np.concatenate(all_labels)
-        return torch.from_numpy(labels).reshape(original_shape)
+        # Assign predictions back to valid tokens
+        labels = np.concatenate(valid_labels)
+        all_labels[valid_indices] = torch.from_numpy(
+            labels
+        ).long()  # Convert to long dtype
+
+        return all_labels.reshape(attention_mask.shape)
 
     def save_checkpoint(self, path: Path):
         """Save clustering results"""
@@ -109,7 +165,9 @@ class ActivationKMeans(nn.Module):
     ) -> Dict[int, List[Tuple[int, List[int], int]]]:
         """Analyze clusters by showing tokens in their original context"""
         # Get cluster assignments
-        labels = self.predict(activations)  # [batch_size, seq_len]
+        labels = self.predict(
+            activations, torch.ones_like(activations[..., 0])
+        )  # [batch_size, seq_len]
 
         # Create a dictionary to store examples for each cluster
         cluster_examples = defaultdict(list)
