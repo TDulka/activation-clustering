@@ -67,6 +67,16 @@ class PileDataset(data.Dataset):
             )
             self.data.append(tokens.input_ids[0])
 
+    def preview_samples(self, n=10):
+        """Print n samples from the dataset with their decoded text"""
+        for i in range(min(n, len(self.data))):
+            # Decode the token IDs back to text
+            decoded_text = self.tokenizer.decode(self.data[i])
+            print(f"\nSample {i+1}:")
+            print("-" * 50)
+            print(decoded_text)
+            print("-" * 50)
+
     def __len__(self):
         """Return the number of samples in the dataset"""
         return len(self.data)
