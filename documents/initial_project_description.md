@@ -1,3 +1,5 @@
+From https://x.com/StephenLCasper/status/1799946785055711495
+
 In addition to basic baselines that would be important when trying to accomplish various tasks with a sparse autoencoder (peft, model editing, rep-e, probing, data screening), I think that a clustering method could offer a pretty compelling baseline.
 
 Approach:
