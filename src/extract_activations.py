@@ -117,7 +117,7 @@ class IncrementalWhitener:
         self.reverse_transform = U @ torch.diag(S.pow(0.5))
 
     def save(self, path: str):
-        """Save whitening parameters including reverse transform."""
+        """Save whitening parameters."""
         torch.save(
             {
                 "mean": self.mean,
@@ -129,7 +129,7 @@ class IncrementalWhitener:
         )
 
     def load(self, path: str):
-        """Load whitening parameters including reverse transform."""
+        """Load whitening parameters."""
         params = torch.load(path)
         self.mean = params["mean"]
         self.transform = params["transform"]
