@@ -1,167 +1,161 @@
-# Activation Extraction and Storage Strategy
+# Activation Extraction Strategy
 
 ## Overview
-This document outlines our approach to extracting, processing, and storing neural network activations for large-scale analysis. We will process a subset of the Pile Uncopyrighted dataset (available on HuggingFace) while managing memory and storage constraints.
+This document describes our approach to extracting and processing neural network activations from language models. The system extracts activations from specific layers, applies whitening transformations, and stores the results efficiently for further analysis.
 
-## Dataset and System Requirements
+## Core Components
 
-### Dataset
-- Source: [The Pile Uncopyrighted](https://huggingface.co/datasets/monology/pile-uncopyrighted)
-- Subset Size: 300k samples (approximately 33.6% of the training split)
-- Sequence Length: 128 tokens per sample
-- Hidden State Dimension: 2304
+### 1. ExtractionConfig
+Configuration dataclass that controls the extraction process:
+```python
+@dataclass
+class ExtractionConfig:
+    model: Optional[AutoModelForCausalLM] = None
+    tokenizer: Optional[AutoTokenizer] = None
+    model_name: Optional[str] = None
+    layer_index: int = -1  # Default to last layer
+    batch_size: int = 32
+    max_length: int = 128
+    num_samples: int = 300_000
+    chunk_size: int = 1000
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype: torch.dtype = torch.float16
+    output_dir: str = "./processed_activations"
+    exclude_tokens: List[str] = ["bos", "pad"]
+```
 
-### System Constraints
-- Available Storage: 200GB
-- Expected Storage Requirements:
-  - Raw Activations (float16): ~170GB (300k × 128 × 2304 × 2 bytes)
-  - Final Compressed Size: ~85-100GB after whitening and compression
+### 2. StreamingPileDataset
+Handles efficient data streaming from the Pile dataset:
+- Uses HuggingFace's streaming capabilities
+- Tokenizes text on-the-fly
+- Applies length constraints and padding
+- Returns batches of token IDs and attention masks
 
-## Token Selection Strategy
-- **Excluded Tokens:**
-  - Beginning-of-Sequence (BOS) tokens: Have unique distributional properties
-  - Padding tokens: Contain no meaningful information
-- **Token Masking:**
-  - Track valid token positions for each sample
-  - Use masks during statistical computations
-  - Store mask information for downstream analysis
+### 3. IncrementalWhitener
+Computes whitening statistics incrementally:
+- Uses Welford's online algorithm for stable mean/covariance computation
+- Supports saving/loading of whitening parameters
+- Provides forward (whitening) and reverse transformations
 
-## Processing Pipeline
+### 4. ActivationExtractor
+Main class orchestrating the extraction process:
+- Manages model and tokenizer initialization
+- Coordinates the two-pass extraction process
+- Handles chunked storage of processed activations
 
-### 1. First Pass: Computing Global Whitening Statistics
-- Stream through data in fixed-size chunks (1000 samples)
-- Filter out BOS and padding tokens
-- Compute running statistics using Welford's online algorithm across all valid token positions
-- Store minimal memory footprint:
-  - Global mean vector (2304 dimensions)
-  - Global covariance matrix (2304 × 2304)
-  - Expected storage: ~20MB for parameters
+## Extraction Process
 
-### 2. Second Pass: Generating Whitened Activations
-- Process same chunks of 1000 samples
-- Apply global whitening transformation to valid tokens
-- Maintain original positions and mask information
-- Immediately save processed chunks to disk
-- Use NPZ compression (expected 1.5-2x reduction)
-- Expected final size: ~85-100GB
+### First Pass: Computing Whitening Statistics
+1. Stream data through the model in batches
+2. Extract activations from the specified layer
+3. Update running statistics using IncrementalWhitener
+4. Save whitening parameters for later use
 
-### 3. Dataset Creation
-Convert processed activations into a HuggingFace dataset:
-- Memory-mapped format for efficient access
-- Streaming capabilities for large-scale processing
-- Structure:
-  ```python
-  {
-    'whitened_activations': array[300000, 128, 2304],
-    'metadata': {
-      'whitening_params': {
-          'mean': array[2304],
-          'transform_matrix': array[2304, 2304]
-      },
-      'attention_mask': array[300000, 128],  # Valid token masks
-      'sample_ids': list[300000],
-      'processing_config': dict
-    }
-  }
-  ```
+### Second Pass: Processing and Storage
+1. Apply whitening transformation to new batches
+2. Store processed data in chunks containing:
+   - Whitened activations
+   - Attention masks
+   - Token IDs
+3. Use compressed NPZ format for efficient storage
 
-## Implementation Details
+## Data Format
 
-### Key Components
+### Chunk Storage Format
+Each chunk is stored as an NPZ file containing:
+```python
+{
+    'activations': array[batch_size, seq_length, hidden_dim],  # Whitened activations
+    'attention_mask': array[batch_size, seq_length],  # Valid token masks
+    'token_ids': array[batch_size, seq_length]  # Original token IDs
+}
+```
 
-1. **IncrementalWhitener**
-   - Handles online computation of global whitening statistics
-   - Implements token filtering and masking
-   - Saves/loads whitening parameters
-   - Applies whitening transformations
+### Whitening Parameters
+Stored separately as a PyTorch file containing:
+```python
+{
+    'mean': tensor[hidden_dim],
+    'transform': tensor[hidden_dim, hidden_dim],
+    'reverse_transform': tensor[hidden_dim, hidden_dim],
+    'n_samples': int
+}
+```
 
-2. **ChunkedActivationExtractor**
-   - Manages batch processing of samples
-   - Interfaces with model for activation extraction
-   - Handles token selection and masking
-   - Handles efficient disk I/O
+## Usage Example
 
-3. **DatasetCreator**
-   - Converts processed chunks to HuggingFace dataset
-   - Implements memory mapping and streaming
-   - Manages metadata and validation
-   - Preserves mask information
+```python
+# Initialize configuration
+config = ExtractionConfig(
+    model_name="google/gemma-2b",
+    layer_index=-1,
+    num_samples=300_000,
+    output_dir="./processed_activations"
+)
 
-### Storage Strategy
-1. Temporary Storage:
-   - Raw activation chunks (deleted after processing)
-   - Whitening parameters (~20MB)
+# Create extractor
+extractor = ActivationExtractor(config)
 
-2. Permanent Storage:
-   - Compressed whitened activations (~85-100GB)
-   - HuggingFace dataset files with masks
-   - Processing metadata and configuration
+# First pass: compute whitening statistics
+extractor.compute_whitening_statistics()
+
+# Second pass: process and store whitened activations
+extractor.process_and_store_whitened()
+```
+
+## Key Features
+
+### Memory Efficiency
+- Streaming dataset processing
+- Incremental statistics computation
+- Chunked storage of results
+- Optional float16 precision
+
+### Robustness
+- Excludes special tokens (BOS, padding)
+- Saves progress in chunks
+- Includes token IDs for analysis
+
+### Flexibility
+- Configurable batch and chunk sizes
+- Support for different model architectures
+- Adjustable sequence lengths
+- Custom token exclusion
+
+## Implementation Notes
+
+### Token Handling
+- Attention masks track valid tokens
+- Special tokens (BOS, padding) are excluded from statistics
+- Original token IDs are preserved for analysis
+
+### Storage Management
+- Chunks are saved progressively during processing
+- NPZ compression reduces storage requirements
+- Each chunk contains complete context (masks, IDs)
+- Whitening parameters stored separately for reuse
 
 ### Error Handling
-- Checkpoint saving after each chunk
-- Validation of processed data
-- Recovery mechanisms for interrupted processing
-- Mask validation and consistency checks
+- Validates configuration parameters
+- Checks for required whitening statistics
+- Handles empty batches gracefully
+- Maintains processing state
 
-## Usage Workflow
+## Future Considerations
 
-1. **Initialization**
-   ```python
-   extractor = ChunkedActivationExtractor(
-       model_name="model_id",
-       output_dir="./processed_activations",
-       chunk_size=1000,
-       exclude_tokens=['bos', 'pad']
-   )
-   ```
+1. **Optimization Opportunities**
+   - Multi-GPU processing support
+   - Advanced compression techniques
+   - Parallel chunk processing
 
-2. **Computing Whitening Parameters**
-   ```python
-   whitening_params = extractor.compute_whitening_statistics(dataset)
-   ```
+2. **Additional Features**
+   - Support for multiple layers
+   - Custom activation functions
+   - Advanced token filtering
+   - Progress tracking and reporting
 
-3. **Processing and Storing Activations**
-   ```python
-   extractor.process_and_store_whitened(
-       dataset,
-       whitening_params,
-       compression=True
-   )
-   ```
-
-4. **Creating HuggingFace Dataset**
-   ```python
-   hf_dataset = extractor.to_huggingface_dataset()
-   hf_dataset.push_to_hub("username/dataset_name")
-   ```
-
-## Monitoring and Validation
-
-- Progress tracking per chunk
-- Memory usage monitoring
-- Storage space checking
-- Data integrity validation
-- Token mask validation
-- Processing time estimation
-
-## Future Optimizations
-
-1. **Optional Dimensionality Reduction**
-   - PCA after whitening
-   - Configurable dimension reduction
-   - Storage of transformation matrices
-
-2. **Advanced Compression**
-   - Quantization options
-   - Custom compression algorithms
-   - Sparse storage formats
-
-3. **Parallel Processing**
-   - Multi-GPU support
-   - Distributed computation
-   - Parallel I/O operations
-
-4. **Advanced Token Selection**
-   - Configurable token filtering criteria
-   - Statistical outlier detection
-   - Position-based selection options
+3. **Analysis Tools**
+   - Activation visualization
+   - Statistical analysis utilities
+   - Token-level correlations
+   - Clustering integration
