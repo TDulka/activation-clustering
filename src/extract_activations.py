@@ -200,6 +200,7 @@ class ActivationExtractor:
 
         chunk_activations = []
         chunk_masks = []
+        chunk_token_ids = []
         chunk_count = 0
 
         for batch in tqdm(dataloader, desc="Processing activations"):
@@ -213,29 +214,37 @@ class ActivationExtractor:
 
             chunk_activations.append(whitened.to(torch.float16))
             chunk_masks.append(batch["attention_mask"])
+            chunk_token_ids.append(batch["input_ids"])
 
             if (
                 len(chunk_activations) * self.config.batch_size
                 >= self.config.chunk_size
             ):
-                self._save_chunk(chunk_activations, chunk_masks, chunk_count)
+                self._save_chunk(
+                    chunk_activations, chunk_masks, chunk_token_ids, chunk_count
+                )
                 chunk_activations = []
                 chunk_masks = []
+                chunk_token_ids = []
                 chunk_count += 1
 
         # Save any remaining data
         if chunk_activations:
-            self._save_chunk(chunk_activations, chunk_masks, chunk_count)
+            self._save_chunk(
+                chunk_activations, chunk_masks, chunk_token_ids, chunk_count
+            )
 
-    def _save_chunk(self, activations, masks, chunk_id):
+    def _save_chunk(self, activations, masks, token_ids, chunk_id):
         """Save a chunk of processed activations."""
         activations = torch.cat(activations, dim=0)
         masks = torch.cat(masks, dim=0)
+        token_ids = torch.cat(token_ids, dim=0)
 
         np.savez_compressed(
             f"{self.config.output_dir}/chunk_{chunk_id}.npz",
             activations=activations.numpy(),
             attention_mask=masks.numpy(),
+            token_ids=token_ids.numpy(),
         )
 
 # %% Main execution

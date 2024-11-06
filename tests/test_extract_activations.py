@@ -323,3 +323,53 @@ def test_end_to_end_small_sample(tmp_path):
         assert Path(tmp_path / "whitening_params.pt").exists()
         chunk_files = list(tmp_path.glob("chunk_*.npz"))
         assert len(chunk_files) > 0
+
+        # New: Verify chunk contents include token IDs
+        chunk_data = np.load(chunk_files[0])
+        assert "token_ids" in chunk_data.files
+        assert "activations" in chunk_data.files
+        assert "attention_mask" in chunk_data.files
+
+        # Check shapes match
+        assert chunk_data["token_ids"].shape[1] == config.max_length
+        assert chunk_data["activations"].shape[1] == config.max_length
+        assert chunk_data["attention_mask"].shape[1] == config.max_length
+
+
+# Add new test specifically for token ID storage
+def test_save_chunk_includes_token_ids(tmp_path):
+    # Create mock model and tokenizer
+    mock_model = Mock()
+    mock_model.config.hidden_size = 768
+    mock_tokenizer = Mock()
+
+    config = ExtractionConfig(
+        model_name="test_model",  # Add model_name
+        output_dir=str(tmp_path),
+        model=mock_model,  # Add mock model
+        tokenizer=mock_tokenizer,  # Add mock tokenizer
+    )
+
+    extractor = ActivationExtractor(config)
+
+    # Create sample data
+    batch_size = 2
+    seq_length = 4
+    hidden_dim = 768
+
+    activations = [torch.randn(batch_size, seq_length, hidden_dim)]
+    masks = [torch.ones(batch_size, seq_length)]
+    token_ids = [torch.randint(0, 1000, (batch_size, seq_length))]
+
+    # Save chunk
+    extractor._save_chunk(activations, masks, token_ids, chunk_id=0)
+
+    # Load and verify
+    chunk_path = Path(tmp_path) / "chunk_0.npz"
+    assert chunk_path.exists()
+
+    chunk_data = np.load(chunk_path)
+    assert "token_ids" in chunk_data.files
+    assert chunk_data["token_ids"].shape == (batch_size, seq_length)
+    assert chunk_data["activations"].shape[:2] == (batch_size, seq_length)
+    assert chunk_data["attention_mask"].shape == (batch_size, seq_length)
