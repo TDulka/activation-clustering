@@ -16,7 +16,6 @@ class ClusteringConfig:
     d_model: int
     temperature: float = 1.0
     min_membership: float = 0.01
-    max_memory_gb: float = 8.0
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     n_exemplars: int = 100
     context_window: int = 10
