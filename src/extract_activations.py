@@ -28,9 +28,9 @@ class ExtractionConfig:
     num_samples: int = 300_000
     chunk_size: int = 1000
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype: torch.dtype = torch.float16  # Changed to float16 for storage efficiency
+    dtype: torch.dtype = torch.float16
     output_dir: str = "./processed_activations"
-    exclude_tokens: List[str] = None
+    exclude_tokens: Optional[List[str]] = None
 
     def __post_init__(self):
         self.exclude_tokens = self.exclude_tokens or ["bos", "pad"]
@@ -87,7 +87,9 @@ class IncrementalWhitener:
     def update(self, batch_activations: torch.Tensor, attention_mask: torch.Tensor):
         """Update statistics using Welford's online algorithm."""
         # Flatten valid activations using attention mask
-        valid_activations = batch_activations[attention_mask.bool()]
+        valid_activations = batch_activations[attention_mask.bool()].view(
+            -1, self.hidden_dim
+        )
 
         batch_size = valid_activations.shape[0]
         if batch_size == 0:
@@ -98,7 +100,7 @@ class IncrementalWhitener:
         self.n += batch_size
         self.mean += delta.sum(0) / self.n
         delta2 = valid_activations - self.mean
-        self.S += (delta * delta2.T).sum(0)
+        self.S += torch.matmul(delta.T, delta2)
 
     def finalize(self):
         """Compute final whitening parameters."""

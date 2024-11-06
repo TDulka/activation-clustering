@@ -15,10 +15,23 @@ from src.extract_activations import (
 @pytest.fixture
 def mock_tokenizer():
     tokenizer = Mock()
-    tokenizer.return_value = {
-        "input_ids": torch.ones(1, 128, dtype=torch.long),
-        "attention_mask": torch.ones(1, 128, dtype=torch.long),
-    }
+
+    def tokenize_func(*args, **kwargs):
+        # Return consistent tensor shapes
+        return {
+            "input_ids": torch.ones(
+                kwargs.get("batch_size", 1),
+                kwargs.get("max_length", 128),
+                dtype=torch.long,
+            ),
+            "attention_mask": torch.ones(
+                kwargs.get("batch_size", 1),
+                kwargs.get("max_length", 128),
+                dtype=torch.long,
+            ),
+        }
+
+    tokenizer.side_effect = tokenize_func
     return tokenizer
 
 
@@ -26,8 +39,15 @@ def mock_tokenizer():
 def mock_model():
     model = Mock()
     model.config.hidden_size = 768
-    # Mock hidden states output
-    model.return_value.hidden_states = [torch.randn(32, 128, 768) for _ in range(12)]
+
+    def forward(*args, **kwargs):
+        batch_size = args[0].shape[0]  # Get batch size from input
+        output = Mock()
+        # Match hidden states shape with batch size
+        output.hidden_states = [torch.randn(batch_size, 128, 768) for _ in range(12)]
+        return output
+
+    model.side_effect = forward
     return model
 
 
@@ -42,6 +62,23 @@ def basic_config():
         device="cpu",
         output_dir="./test_outputs",
     )
+
+
+@pytest.fixture(autouse=True)
+def cleanup_test_outputs():
+    """Cleanup test outputs before and after each test."""
+    test_outputs = Path("./test_outputs")
+    if test_outputs.exists():
+        for file in test_outputs.glob("*"):
+            file.unlink()
+        test_outputs.rmdir()
+
+    yield
+
+    if test_outputs.exists():
+        for file in test_outputs.glob("*"):
+            file.unlink()
+        test_outputs.rmdir()
 
 
 # Test ExtractionConfig
@@ -106,20 +143,44 @@ async def test_activation_extractor_initialization(
 
 
 @pytest.mark.asyncio
-async def test_compute_whitening_statistics(basic_config, mock_model, mock_tokenizer):
+async def test_compute_whitening_statistics(
+    basic_config, mock_model, mock_tokenizer, tmp_path
+):
+    # Update config to use temporary directory
+    output_dir = tmp_path / "test_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)  # Create directory explicitly
+    basic_config.output_dir = str(output_dir)
+
     with patch(
         "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model
     ), patch(
         "transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer
-    ), patch("src.extract_activations.StreamingPileDataset") as mock_dataset:
-        # Mock dataset iteration
-        mock_dataset.return_value = [
-            {
-                "input_ids": torch.ones(128, dtype=torch.long),
-                "attention_mask": torch.ones(128, dtype=torch.long),
-            }
-            for _ in range(5)
-        ]
+    ), patch("src.extract_activations.StreamingPileDataset") as mock_dataset_class:
+        # Create a proper mock dataset that works with DataLoader
+        class MockDataset:
+            def __init__(self):
+                self.data = [
+                    {
+                        "input_ids": torch.ones(
+                            basic_config.max_length, dtype=torch.long
+                        ),
+                        "attention_mask": torch.ones(
+                            basic_config.max_length, dtype=torch.long
+                        ),
+                    }
+                    for _ in range(5)
+                ]
+
+            def __iter__(self):
+                return iter(self.data)
+
+            def __len__(self):
+                return len(self.data)
+
+            def __getitem__(self, idx):
+                return self.data[idx]
+
+        mock_dataset_class.return_value = MockDataset()
 
         extractor = ActivationExtractor(basic_config)
         extractor.compute_whitening_statistics()
@@ -132,9 +193,50 @@ async def test_compute_whitening_statistics(basic_config, mock_model, mock_token
 # Test StreamingPileDataset
 @pytest.mark.asyncio
 async def test_streaming_dataset(mock_tokenizer):
-    with patch("datasets.load_dataset") as mock_load_dataset:
-        mock_load_dataset.return_value = [{"text": "test text"} for _ in range(5)]
+    # Create a proper mock streaming dataset
+    class MockStreamingDataset:
+        def __init__(self):
+            self.data = [{"text": f"test text {i}"} for i in range(5)]
+            self._iter_counter = 0
 
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._iter_counter >= len(self.data):
+                raise StopIteration
+            item = self.data[self._iter_counter]
+            self._iter_counter += 1
+            return item
+
+        def take(self, n):
+            """Implements datasets.IterableDataset.take"""
+            self.data = self.data[:n]
+            return self
+
+    # Create a mock load_dataset function that returns our streaming dataset
+    def mock_load(*args, split=None, streaming=None):
+        assert args[0] == "monology/pile-uncopyrighted"
+        assert split == "train"
+        assert streaming is True
+        return MockStreamingDataset()
+
+    # Mock the tokenizer to return proper tensor outputs
+    class MockTokenizerOutput:
+        def __init__(self, input_ids, attention_mask):
+            self.input_ids = input_ids
+            self.attention_mask = attention_mask
+
+    def mock_tokenize(*args, **kwargs):
+        return MockTokenizerOutput(
+            input_ids=torch.ones(1, kwargs.get("max_length", 128)),
+            attention_mask=torch.ones(1, kwargs.get("max_length", 128)),
+        )
+
+    mock_tokenizer.side_effect = mock_tokenize
+
+    # Use the patch where datasets.load_dataset is imported
+    with patch("src.extract_activations.load_dataset", mock_load):
         dataset = StreamingPileDataset(
             tokenizer=mock_tokenizer, max_length=128, num_samples=3
         )
@@ -143,6 +245,9 @@ async def test_streaming_dataset(mock_tokenizer):
         assert len(items) == 3
         assert all(isinstance(item, dict) for item in items)
         assert all("input_ids" in item and "attention_mask" in item for item in items)
+        # Verify tensor shapes
+        assert all(item["input_ids"].shape == torch.Size([128]) for item in items)
+        assert all(item["attention_mask"].shape == torch.Size([128]) for item in items)
 
 
 # Integration tests
@@ -161,22 +266,60 @@ def test_end_to_end_small_sample(tmp_path):
     # Create synthetic model and tokenizer
     model = Mock()
     model.config.hidden_size = 4
-    model.return_value.hidden_states = [torch.randn(2, 4, 4)]
+
+    def model_forward(*args, **kwargs):
+        batch_size = args[0].shape[0]
+        output = Mock()
+        # Make sure hidden states match the expected shape
+        output.hidden_states = [
+            torch.randn(batch_size, config.max_length, model.config.hidden_size)
+        ]
+        return output
+
+    model.side_effect = model_forward
+
+    # Fix tokenizer mock
+    class MockTokenizerOutput:
+        def __init__(self, input_ids, attention_mask):
+            self.input_ids = input_ids
+            self.attention_mask = attention_mask
+
+    def tokenize_func(*args, **kwargs):
+        batch_size = kwargs.get("batch_size", 1)
+        return MockTokenizerOutput(
+            input_ids=torch.ones(batch_size, config.max_length, dtype=torch.long),
+            attention_mask=torch.ones(batch_size, config.max_length, dtype=torch.long),
+        )
 
     tokenizer = Mock()
-    tokenizer.return_value = {
-        "input_ids": torch.ones(1, 4, dtype=torch.long),
-        "attention_mask": torch.ones(1, 4, dtype=torch.long),
-    }
+    tokenizer.side_effect = tokenize_func
 
     config.model = model
     config.tokenizer = tokenizer
 
-    extractor = ActivationExtractor(config)
-    extractor.compute_whitening_statistics()
-    extractor.process_and_store_whitened()
+    # Mock the dataset loading
+    with patch("src.extract_activations.load_dataset") as mock_load_dataset:
+        # Create a proper mock dataset
+        class MockStreamingDataset:
+            def __iter__(self):
+                return iter([{"text": f"test text {i}"} for i in range(4)])
 
-    # Verify outputs
-    assert Path(tmp_path / "whitening_params.pt").exists()
-    chunk_files = list(tmp_path.glob("chunk_*.npz"))
-    assert len(chunk_files) > 0
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, idx):
+                return {"text": f"test text {idx}"}
+
+        def mock_load(*args, **kwargs):
+            return MockStreamingDataset()
+
+        mock_load_dataset.side_effect = mock_load
+
+        extractor = ActivationExtractor(config)
+        extractor.compute_whitening_statistics()
+        extractor.process_and_store_whitened()
+
+        # Verify outputs
+        assert Path(tmp_path / "whitening_params.pt").exists()
+        chunk_files = list(tmp_path.glob("chunk_*.npz"))
+        assert len(chunk_files) > 0
