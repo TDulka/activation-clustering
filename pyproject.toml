@@ -2,14 +2,14 @@
 name = "activation-clustering"
 version = "0.1.0"
 description = "Neural network activation clustering for interpretability research"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Tomas Dulka <tomasdulka@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.8"
-torch = "2.1.0"
+torch = ">=2.1.0"
 transformers = "^4.0.0"
 datasets = "^2.0.0"
 numpy = "^1.20.0"
@@ -31,4 +31,4 @@ include = '\.pyi?$'
 
 [tool.isort]
 profile = "black"
-multi-line-output = 3 
+multi-line-output = 3
