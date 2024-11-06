@@ -11,15 +11,16 @@ import numpy as np
 from pathlib import Path
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
 
 # %% Configuration
 @dataclass
 class ExtractionConfig:
     """Configuration for the activation extraction process."""
+
     model: Optional[AutoModelForCausalLM] = None
     tokenizer: Optional[AutoTokenizer] = None
     model_name: Optional[str] = None
@@ -37,6 +38,7 @@ class ExtractionConfig:
         self.exclude_tokens = self.exclude_tokens or ["bos", "pad"]
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
+
 # %% Dataset handling
 class StreamingPileDataset(data.IterableDataset):
     """Streams data from the Pile dataset with token filtering."""
@@ -45,12 +47,10 @@ class StreamingPileDataset(data.IterableDataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.num_samples = num_samples
-        
+
         # Initialize streaming dataset
         self.dataset = load_dataset(
-            "monology/pile-uncopyrighted", 
-            split="train", 
-            streaming=True
+            "monology/pile-uncopyrighted", split="train", streaming=True
         )
 
     def __iter__(self):
@@ -72,6 +72,7 @@ class StreamingPileDataset(data.IterableDataset):
                 "attention_mask": tokens.attention_mask[0],
             }
             count += 1
+
 
 class IncrementalWhitener:
     """Implements online computation of whitening statistics."""
@@ -135,6 +136,7 @@ class IncrementalWhitener:
         self.transform = params["transform"]
         self.reverse_transform = params["reverse_transform"]
         self.n = params["n_samples"]
+
 
 class ActivationExtractor:
     """Handles model loading and activation extraction with whitening."""
@@ -246,6 +248,7 @@ class ActivationExtractor:
             attention_mask=masks.numpy(),
             token_ids=token_ids.numpy(),
         )
+
 
 # %% Main execution
 if __name__ == "__main__":

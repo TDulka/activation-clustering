@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from unittest.mock import Mock, patch
-from src.extract_activations import (
+from activation_clustering.extract_activations import (
     ExtractionConfig,
     StreamingPileDataset,
     IncrementalWhitener,
@@ -155,7 +155,9 @@ async def test_compute_whitening_statistics(
         "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model
     ), patch(
         "transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer
-    ), patch("src.extract_activations.StreamingPileDataset") as mock_dataset_class:
+    ), patch(
+        "activation_clustering.extract_activations.StreamingPileDataset"
+    ) as mock_dataset_class:
         # Create a proper mock dataset that works with DataLoader
         class MockDataset:
             def __init__(self):
@@ -236,7 +238,7 @@ async def test_streaming_dataset(mock_tokenizer):
     mock_tokenizer.side_effect = mock_tokenize
 
     # Use the patch where datasets.load_dataset is imported
-    with patch("src.extract_activations.load_dataset", mock_load):
+    with patch("activation_clustering.extract_activations.load_dataset", mock_load):
         dataset = StreamingPileDataset(
             tokenizer=mock_tokenizer, max_length=128, num_samples=3
         )
@@ -298,7 +300,9 @@ def test_end_to_end_small_sample(tmp_path):
     config.tokenizer = tokenizer
 
     # Mock the dataset loading
-    with patch("src.extract_activations.load_dataset") as mock_load_dataset:
+    with patch(
+        "activation_clustering.extract_activations.load_dataset"
+    ) as mock_load_dataset:
         # Create a proper mock dataset
         class MockStreamingDataset:
             def __iter__(self):
