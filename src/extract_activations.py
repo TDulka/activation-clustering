@@ -84,6 +84,8 @@ class IncrementalWhitener:
         self.mean = torch.zeros(self.hidden_dim, dtype=torch.float32)
         self.S = torch.zeros(self.hidden_dim, self.hidden_dim, dtype=torch.float32)
         self.n = 0
+        self.transform = None
+        self.reverse_transform = None
 
     def update(self, batch_activations: torch.Tensor, attention_mask: torch.Tensor):
         """Update statistics using Welford's online algorithm."""
@@ -104,22 +106,34 @@ class IncrementalWhitener:
         self.S += torch.matmul(delta.T, delta2)
 
     def finalize(self):
-        """Compute final whitening parameters."""
+        """Compute final whitening parameters and its reverse transformation."""
         cov = self.S / (self.n - 1)
         U, S, _ = torch.svd(cov)
+
+        # Forward transform (whitening)
         self.transform = U @ torch.diag(S.pow(-0.5))
 
+        # Reverse transform (unwhitening)
+        self.reverse_transform = U @ torch.diag(S.pow(0.5))
+
     def save(self, path: str):
-        """Save whitening parameters."""
+        """Save whitening parameters including reverse transform."""
         torch.save(
-            {"mean": self.mean, "transform": self.transform, "n_samples": self.n}, path
+            {
+                "mean": self.mean,
+                "transform": self.transform,
+                "reverse_transform": self.reverse_transform,
+                "n_samples": self.n,
+            },
+            path,
         )
 
     def load(self, path: str):
-        """Load whitening parameters."""
+        """Load whitening parameters including reverse transform."""
         params = torch.load(path)
         self.mean = params["mean"]
         self.transform = params["transform"]
+        self.reverse_transform = params["reverse_transform"]
         self.n = params["n_samples"]
 
 class ActivationExtractor:
