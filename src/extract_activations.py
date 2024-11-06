@@ -23,6 +23,7 @@ class ExtractionConfig:
     model: Optional[AutoModelForCausalLM] = None
     tokenizer: Optional[AutoTokenizer] = None
     model_name: Optional[str] = None
+    layer_index: int = -1
     batch_size: int = 32
     max_length: int = 128
     num_samples: int = 300_000
@@ -160,11 +161,11 @@ class ActivationExtractor:
         self.whitener = IncrementalWhitener(self.model.config.hidden_size)
 
         for batch in tqdm(dataloader, desc="Computing whitening statistics"):
-            # Extract activations
+            # Extract activations from specified layer
             outputs = self.model(
                 batch["input_ids"].to(self.config.device), output_hidden_states=True
             )
-            activations = outputs.hidden_states[-1]
+            activations = outputs.hidden_states[self.config.layer_index]
 
             # Update statistics
             self.whitener.update(activations.cpu(), batch["attention_mask"])
@@ -191,7 +192,7 @@ class ActivationExtractor:
             outputs = self.model(
                 batch["input_ids"].to(self.config.device), output_hidden_states=True
             )
-            activations = outputs.hidden_states[-1].cpu()
+            activations = outputs.hidden_states[self.config.layer_index].cpu()
 
             # Apply whitening
             whitened = (activations - self.whitener.mean) @ self.whitener.transform
@@ -226,7 +227,8 @@ class ActivationExtractor:
 # %% Main execution
 if __name__ == "__main__":
     config = ExtractionConfig(
-        model_name="google/gemma-2b",
+        model_name="google/gemma-2-2b",
+        layer_index=-1,
         num_samples=300_000,
         output_dir="./processed_activations",
     )
