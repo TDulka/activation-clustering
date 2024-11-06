@@ -38,10 +38,6 @@ clustering = SequentialSoftClustering(n_clusters=256, d_model=2304)
 clustering.fit(whitened_activations)
 ```
 
-## Features
-
-- Memory-efficient activation extraction
-- Soft clustering with temperature scaling
 
 ## Requirements
 
